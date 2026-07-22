@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>个人工作台 v4.3 · 简洁、本地优先的个人助手</title>
+
+<!-- ============================================================
+     个人工作台  版本日志  (VERSION LOG)
+     仅记录对外公开发布的版本号。SCHEMA_VERSION 见 JS 顶部。
+     ============================================================ -->
+<!-- v4.3.0 (2026-07-19)  轻量习惯助手：今日行动、弹性计划、休息与温和回顾。
+     v4.2.0 (2026-07-19)  生活行动助手：近期事项、出行准备、重要日子与阅读下一步。
+     v4.1.0 (2026-07-18)  财务助手升级：真实发生口径、预算与待确认账单、基金分组。
+     v4.0.0 (2026-07-18)  产品化重构：
+        · 默认导航收敛为今天、工作、日历、回顾和更多
+        · 专业模块改为按需启用，并支持固定到顶部
+        · 科研升级为进展助手，突出下一步、等待和截止日期
+        · 健康运动升级为行动首页，支持个人目标、改期和趋势
+        · 保持本地优先和单 HTML 便携使用方式
+-->
+<!-- v3.1.0 (2026-07-14)  排版/业务全面升级：
+        · nav 三段两行布局 + 圆角收口 8px（告别垂直药丸）
+        · 每组 prefix lable + 计数徽章（数字常态化）
+        · 概览页 Top-3 今日，更聚焦"现在该做哪件"
+        · 智能提醒横幅（逾期/今日/本周 首屏即见）
+        · 概览板块可折叠，默认折叠热力图/金融月/纪念日
+        · 命令面板历史记忆（最近 5 条 quick add）
+        · nav sticky + 毛玻璃，滚动不再丢导航
+        · ⌘K 提示永久可见 + 全套全局快捷键
+     数据 schema 未变，老用户无感知升级。
+-->
+
+<link href="./assets/app.css" rel="stylesheet"/></head>
+<body>
+<header>
+<button aria-label="侧栏开关" class="btn" id="navToggle" onclick="toggleNav()" title="侧栏 (m)">☰</button>
+<div class="brand-wrap">
+<h1><span class="logo">🗂️</span> <span class="brand">个人工作台</span></h1>
+<div class="sub">今天做什么 · 随手记下 · 安心保存在本机 <span style="color:var(--primary);font-weight:700">v4.3</span></div>
+</div>
+<div class="spacer"></div>
+<div style="position:relative;flex:1;max-width:320px"><input aria-label="搜索当前页面" class="search" id="search" onblur="this.parentElement.classList.remove('focused')" onfocus="this.parentElement.classList.add('focused')" oninput="onSearch(this.value)" placeholder="🔍 搜索当前页面…"/><span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:2px 6px;pointer-events:none">/</span></div>
+<div class="tools">
+<button class="btn" id="themeBtn" onclick="toggleTheme()" title="切换深色 / 浅色">🌙</button>
+<span class="save-state" title="数据默认保存在当前电脑"><span class="sync-dot off" id="syncDot" title="未启用同步"></span><span id="saveState">已保存在本机</span></span>
+</div>
+<button class="btn primary" onclick="newItem()">＋ 新建</button>
+</header>
+<nav id="nav">
+<div class="nav-row">
+<div class="nav-group" id="coreNav">
+<button class="tab" data-cat="overview" onclick="setView('overview')" type="button"><span class="ico">☀️</span>今天<span class="badge" id="bd-overview" title="今日与逾期事项">0</span></button>
+<button class="tab" data-cat="work" onclick="setView('work')" type="button"><span class="ico">💼</span>工作<span class="badge" id="bd-work" title="待办">0</span></button>
+<button class="tab" data-cat="calendar" onclick="setView('calendar')" type="button"><span class="ico">📅</span>日历<span class="badge" id="bd-calendar" title="近期日程">0</span></button>
+<button class="tab" data-cat="review" onclick="setView('review')" type="button"><span class="ico">📈</span>回顾</button>
+</div>
+<div aria-label="已置顶模块" class="nav-group" id="moduleNav"></div>
+<div style="flex:1"></div>
+<div class="nav-group" style="margin-left:auto">
+<button class="tab" data-cat="more" onclick="setView('more')" type="button"><span class="ico">☷</span>更多</button>
+</div>
+</div>
+</nav>
+<div id="navBackdrop" onclick="toggleNav(false)"></div>
+<!-- news manager modal -->
+<div class="mask" id="newsMask" onclick="if(event.target===this)closeNewsMgr()">
+<div class="modal">
+<h3>⚙ 热榜平台管理</h3>
+<div class="hint" style="margin-top:0;margin-bottom:14px">🧭 反信息茧房：把多个平台的热榜并排聚合，一眼看清各处正在热议什么，不困在单一平台的推荐里。可开关平台，或添加自定义热榜接口。</div>
+<div id="newsFeedList"></div>
+<div class="field" style="margin-top:14px"><label>平台名称</label><input id="nf_name" placeholder="例如：B站"/></div>
+<div class="field"><label>热榜接口地址（返回 JSON，需自带 CORS）</label><input id="nf_url" placeholder="https://60s.viki.moe/v2/xxx"/></div>
+<div class="field"><label>分类标签</label><select id="nf_cat"></select></div>
+<input id="nf_proxy" type="hidden"/>
+<div class="modal-acts">
+<button class="btn" onclick="closeNewsMgr()">关闭</button>
+<button class="btn primary" onclick="saveNewsFeed()">＋ 添加平台</button>
+</div>
+</div>
+</div>
+<div id="app"></div>
+<!-- item modal -->
+<div class="mask" id="mask" onclick="if(event.target===this)closeForm()">
+<div class="modal">
+<h3 id="formTitle">新建事项</h3>
+<div class="field">
+<label id="f_title_label">标题 *</label>
+<input id="f_title" placeholder="例如：精读 CVPR2026 某论文 / 提交季度研发报告"/>
+</div>
+<div class="field" id="f_sport_box" style="display:none">
+<div class="row">
+<div class="field" style="margin:0">
+<label>运动类型</label>
+<select id="f_sportType"><option>跑步</option><option>健身</option><option>游泳</option><option>骑行</option><option>球类</option><option>瑜伽</option><option>其他</option></select>
+</div>
+<div class="field" style="margin:0">
+<label>时长(分钟)</label>
+<input id="f_minutes" min="0" placeholder="45" type="number"/>
+</div>
+</div>
+<div class="field" style="margin:10px 0 0">
+<label>这次运动的感受</label>
+<select id="f_effort"><option value="">暂不记录</option><option value="light">轻松 · 还能继续</option><option value="moderate">刚好 · 有训练感</option><option value="hard">吃力 · 需要恢复</option><option value="max">接近极限</option></select>
+</div>
+</div>
+<div class="field" id="f_proj_box" style="display:none">
+<label>所属项目</label>
+<select id="f_project"></select>
+</div>
+<div class="field" id="f_mile_box" style="display:none">
+<label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+<input id="f_milestone" type="checkbox"/> 标记为里程碑（计入项目进度）
+      </label>
+</div>
+<div class="field">
+<label>备注 / 链接</label>
+<textarea id="f_note" placeholder="细节、参考资料链接、下一步…"></textarea>
+</div>
+<div class="row" id="f_status_box">
+<div class="field">
+<label>状态</label>
+<select id="f_status"><option value="todo">待办</option><option value="doing">进行中</option><option value="done">已完成</option></select>
+</div>
+<div class="field">
+<label>优先级</label>
+<select id="f_prio"><option value="high">高</option><option selected="" value="mid">中</option><option value="low">低</option></select>
+</div>
+</div>
+<div class="field">
+<label>日期（截止日 / 运动日）</label>
+<input id="f_due" type="date"/>
+</div>
+<div class="row" id="f_hw_box" style="display:none">
+<div class="field" style="margin:0">
+<label>预估工时(小时)</label>
+<input id="f_est" min="0" placeholder="如 8" step="0.5" type="number"/>
+</div>
+<div class="field" style="margin:0">
+<label>实际工时(小时)</label>
+<input id="f_actual" min="0" placeholder="如 6.5" step="0.5" type="number"/>
+</div>
+</div>
+<div class="field" id="f_recur_box">
+<label>重复</label>
+<select id="f_recur">
+<option value="none">不重复</option>
+<option value="daily">每日</option>
+<option value="weekly">每周</option>
+<option value="monthly">每月</option>
+</select>
+</div>
+<div class="field" id="f_tags_box">
+<label>标签（逗号分隔，搜索可用 tag:标签）</label>
+<input id="f_tags" placeholder="如 重点, 等回复"/>
+</div>
+<div class="modal-acts">
+<button class="btn" onclick="closeForm()">取消</button>
+<button class="btn primary" onclick="submitForm()">保存</button>
+</div>
+</div>
+</div>
+<!-- project modal -->
+<div class="mask" id="projMask" onclick="if(event.target===this)closeProject()">
+<div class="modal">
+<h3 id="projTitle">新项目</h3>
+<div class="field"><label>项目名称 *</label><input id="p_name" placeholder="例如：XX 企业研发课题 / 国家基金申请"/></div>
+<div class="field"><label>目标 / 说明</label><textarea id="p_desc" placeholder="一句话描述项目目标"></textarea></div>
+<div class="field"><label>状态</label><select id="p_status"><option value="active">进行中</option><option value="done">已完成</option></select></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeProject()">取消</button>
+<button class="btn primary" onclick="submitProject()">保存</button>
+</div>
+</div>
+</div>
+<!-- paper (在投论文) modal -->
+<div class="mask" id="paperMask" onclick="if(event.target===this)closePaper()">
+<div class="modal">
+<h3 id="paperTitle">新建论文</h3>
+<div class="field"><label>论文标题 *</label><input id="pa_title" placeholder="例如：基于视觉大模型的道路裂缝检测"/></div>
+<div class="row">
+<div class="field"><label>当前阶段</label><select id="pa_stage">
+<option value="idea">💡 想法</option><option value="writing">✍️ 撰写中</option><option value="internal">👥 内部审阅</option><option value="preparing">📦 准备投稿</option>
+<option value="submitted">📨 已投稿</option><option value="review">🔍 审稿中</option><option value="revision">🛠️ 修改中</option><option value="major">🔧 大修</option><option value="minor">🪛 小修</option><option value="rereview">🔄 再审</option>
+<option value="accepted">✅ 已录用</option><option value="published">🎉 已发表</option><option value="rejected">❌ 拒稿</option><option value="archived">🗃️ 已归档</option>
+</select></div>
+<div class="field"><label>我的角色</label><select id="pa_role">
+<option value="first">第一作者</option><option value="corresponding">通讯作者</option><option value="cofirst">共同一作</option><option value="collaborator">合作者</option><option value="supervisor">指导教师</option><option value="other">其他</option>
+</select></div>
+</div>
+<div class="field"><label>关联科研项目</label>
+<select id="pa_rproject"><option value="">— 不关联项目 —</option></select>
+</div>
+<div class="row">
+<div class="field" style="flex:2"><label>目标 / 当前期刊会议</label>
+<input id="pa_journal" placeholder="例如：IEEE T-ITS / CVPR / 自动化学报"/>
+</div>
+<div class="field"><label>下一步截止日</label><input id="pa_next_due" type="date"/></div>
+</div>
+<div class="field"><label>下一步行动</label><input id="pa_next" placeholder="例如：补充消融实验 / 完成方法章初稿"/></div>
+<div class="row">
+<div class="field"><label>等待对象（可选）</label><input id="pa_waiting_for" placeholder="例如：导师反馈 / 编辑决定"/></div>
+<div class="field"><label>下次跟进日</label><input id="pa_followup" type="date"/></div>
+</div>
+<details class="form-more"><summary>更多信息（分区、审稿、笔记）</summary><div class="form-more-body">
+<div class="row"><div class="field"><label>中科院分区</label><select id="pa_zone"><option value="">— 不标注 —</option><option value="z1">一区</option><option value="z2">二区</option><option value="z3">三区</option><option value="z4">四区</option><option value="ei">EI 期刊</option></select></div><div class="field"><label>CCF 等级</label><select id="pa_ccf"><option value="">— 不标注 —</option><option value="a">CCF-A</option><option value="b">CCF-B</option><option value="c">CCF-C</option></select></div></div>
+<div class="row"><div class="field"><label>审稿回复截止日</label><input id="pa_rebuttal" type="date"/></div><div class="field"><label>审稿轮次</label><select id="pa_round"><option value="">— 不标注 —</option><option value="1">第 1 轮</option><option value="2">第 2 轮</option><option value="3">第 3 轮</option><option value="4">第 4 轮+</option></select></div></div>
+<div class="field"><label>备注 / 投稿系统链接</label><textarea id="pa_note" placeholder="审稿意见摘要、投稿系统链接等"></textarea></div>
+<div class="field"><label>Obsidian 笔记链接</label><input id="pa_obs" placeholder="obsidian:// 链接或笔记路径"/></div>
+</div></details>
+<details class="form-more"><summary>📈 阶段历史（保存时自动记录变更）</summary><div class="form-more-body" id="pa_steps"></div></details>
+<div class="modal-acts">
+<button class="btn" onclick="closePaper()">取消</button>
+<button class="btn primary" onclick="submitPaper()">保存</button>
+</div>
+</div>
+</div>
+<!-- patent modal -->
+<div class="mask" id="patentMask" onclick="if(event.target===this)closePatent()">
+<div class="modal">
+<h3 id="patentTitle">新建 · 专利</h3>
+<div class="field"><label>专利名称 *</label><input id="pt_title" placeholder="例如：一种基于视觉大模型的道路裂缝检测方法及系统"/></div>
+<div class="row">
+<div class="field" style="margin-bottom:13px;flex:1">
+<label>专利类型</label>
+<select id="pt_type">
+<option value="invention">发明专利</option>
+<option value="utility">实用新型</option>
+<option value="design">外观设计</option>
+<option value="soft">软件著作权</option>
+</select>
+</div>
+<div class="field" style="margin-bottom:13px;flex:1">
+<label>申请日</label>
+<input id="pt_date" title="申请日" type="date"/>
+</div>
+<div class="field" style="margin-bottom:13px;flex:2">
+<label>申请号 / 专利号 / 登记号</label>
+<input id="pt_number" placeholder="例如：202410123456.7 / 2024SR123456"/>
+</div>
+</div>
+<div class="field"><label>关联科研项目</label>
+<select id="pt_rproject"><option value="">— 不关联项目 —</option></select>
+</div>
+<div class="row">
+<div class="field" style="margin-bottom:13px;flex:1">
+<label>下次年费 / 维持费截止日</label>
+<input id="pt_fee" title="专利年费缴纳截止日，临近会提醒" type="date"/>
+</div>
+</div>
+<div class="field"><label>备注 / 链接</label><textarea id="pt_note" placeholder="权利人、代理机构、下一步…"></textarea></div>
+<div class="field"><label>Obsidian 笔记链接</label><input id="pt_obs" placeholder="在 Obsidian 右键笔记→复制 Obsidian 链接，粘贴到这里（留空则按标题模糊搜索）"/></div>
+<div class="ptl-box">
+<div class="ptl-head">📈 专利生命周期 <span style="font-weight:400;color:var(--muted)">（递交→受理→实审→授权；或驳回/转让，每次状态变更记一条）</span></div>
+<div id="pt_steps"></div>
+<div class="ptl-add">
+<select id="pt_new_status" title="本次状态">
+<option value="filed">已递交</option>
+<option value="accepted">受理</option>
+<option value="examined">实审</option>
+<option value="granted">授权</option>
+<option value="rejected">驳回</option>
+<option value="transferred">转让</option>
+</select>
+<input id="pt_new_date" title="日期" type="date"/>
+<input id="pt_new_note" placeholder="备注(可选)" style="flex:1;min-width:120px"/>
+<button class="btn primary" onclick="addPatentStep()" type="button">＋ 添加</button>
+</div>
+</div>
+<div class="modal-acts">
+<button class="btn" onclick="closePatent()">取消</button>
+<button class="btn primary" onclick="submitPatent()">保存</button>
+</div>
+</div>
+</div>
+<!-- research project modal -->
+<div class="mask" id="rprojMask" onclick="if(event.target===this)closeRProj()">
+<div class="modal">
+<h3 id="rprojTitle">新建 · 科研项目</h3>
+<div class="field"><label>项目名称 *</label><input id="rp_title" placeholder="例如：面向基础设施的智能视觉检测关键技术研究"/></div>
+<div class="row">
+<div class="field" style="margin-bottom:13px;flex:2">
+<label>项目来源 / 类别</label>
+<select id="rp_source">
+<option value="nsfc">国家自然科学基金</option>
+<option value="key">国家重点研发</option>
+<option value="provincial">省部级</option>
+<option value="horizontal">横向课题</option>
+<option value="enterprise">企业合作</option>
+<option value="other">其他</option>
+</select>
+</div>
+<div class="field" style="margin-bottom:13px">
+<label>承担角色</label>
+<select id="rp_role"><option value="host">主持</option><option value="core">骨干</option><option value="member">参与</option></select>
+</div>
+<div class="field" style="margin-bottom:13px">
+<label>状态</label>
+<select id="rp_status">
+<option value="applying">申报中</option>
+<option value="approved">已获批</option>
+<option value="active">在研</option>
+<option value="closed">结题</option>
+<option value="rejected">未获批</option>
+</select>
+</div>
+</div>
+<div class="row">
+<div class="field" style="margin:0">
+<label>经费(万元)</label>
+<input id="rp_fund" min="0" placeholder="如 60" step="0.1" type="number"/>
+</div>
+<div class="field" style="margin:0">
+<label>起始日期</label>
+<input id="rp_start" type="date"/>
+</div>
+<div class="field" style="margin:0">
+<label>截止日期</label>
+<input id="rp_end" type="date"/>
+</div>
+</div>
+<div class="field"><label>备注 / 链接</label><textarea id="rp_note" placeholder="负责内容、合作单位、考核指标…"></textarea></div>
+<div class="field"><label>Obsidian 笔记链接</label><input id="rp_obs" placeholder="在 Obsidian 右键笔记→复制 Obsidian 链接，粘贴到这里（留空则按标题模糊搜索）"/></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeRProj()">取消</button>
+<button class="btn primary" onclick="submitRProj()">保存</button>
+</div>
+</div>
+</div>
+<div class="mask" id="bookMask" onclick="if(event.target===this)closeBook()">
+<div class="modal">
+<h3 id="bookTitle">添加 · 读书清单</h3>
+<div class="field"><label>书名 *</label><input id="bk_title" placeholder="例如：深度学习"/></div>
+<div class="field"><label>作者</label><input id="bk_author" placeholder="例如：Ian Goodfellow"/></div>
+<div class="row">
+<div class="field" style="margin:0">
+<label>状态</label>
+<select id="bk_status">
+<option value="want">想读</option>
+<option value="reading">在读</option>
+<option value="done">已读</option>
+</select>
+</div>
+<div class="field" style="margin:0">
+<label>评分</label>
+<select id="bk_rating">
+<option value="0">未评分</option>
+<option value="1">★</option>
+<option value="2">★★</option>
+<option value="3">★★★</option>
+<option value="4">★★★★</option>
+<option value="5">★★★★★</option>
+</select>
+</div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>阅读进度 (%)</label><input id="bk_progress" max="100" min="0" placeholder="0-100" type="number"/></div>
+<div class="field" style="margin:0;flex:1"><label>开始日期</label><input id="bk_start" type="date"/></div>
+<div class="field" style="margin:0;flex:1"><label>读完日期</label><input id="bk_end" type="date"/></div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:2"><label>下一步阅读</label><input id="bk_next" placeholder="例如：读完第三章 / 整理一页笔记"/></div>
+<div class="field" style="margin:0;flex:1"><label>计划日期</label><input id="bk_next_due" type="date"/></div>
+</div>
+<div class="field"><label>笔记 / 读后感</label><textarea id="bk_note" placeholder="一句话点评、核心收获…"></textarea></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeBook()">取消</button>
+<button class="btn primary" onclick="submitBook()">保存</button>
+</div>
+</div>
+</div>
+<div class="mask" id="travelMask" onclick="if(event.target===this)closeTravel()">
+<div class="modal">
+<h3 id="travelTitle">添加 · 旅行 &amp; 出行</h3>
+<div class="field"><label>目的地 / 标题 *</label><input id="tv_title" placeholder="例如：成都 · 学术会议 + 旅行"/></div>
+<div class="row">
+<div class="field" style="margin:0;flex:1">
+<label>出发日期</label>
+<input id="tv_start" type="date"/>
+</div>
+<div class="field" style="margin:0;flex:1">
+<label>返程日期</label>
+<input id="tv_end" type="date"/>
+</div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1">
+<label>预算 (¥)</label>
+<input id="tv_budget" placeholder="例如：5000"/>
+</div>
+<div class="field" style="margin:0;flex:1">
+<label>签证 / 证件</label>
+<input id="tv_visa" placeholder="例如：需办签证 / 免签"/>
+</div>
+</div>
+<div class="field"><label>下一步准备</label><input id="tv_next" placeholder="例如：购买车票 / 预订酒店 / 申请签证"/></div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>实际花费 (¥)</label><input id="tv_spent" placeholder="行程结束后填写"/></div>
+</div>
+<div class="field"><label>准备清单（每行一项）</label><textarea id="tv_checklist" placeholder="身份证
+充电宝
+相机
+会议邀请函"></textarea><div class="field-help">保存后可以在出行页面逐项勾选完成。</div></div>
+<div class="field"><label>备注</label><textarea id="tv_note" placeholder="交通、住宿、同行人、注意事项…"></textarea></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeTravel()">取消</button>
+<button class="btn primary" onclick="submitTravel()">保存</button>
+</div>
+</div>
+</div>
+<div class="mask" id="annivMask" onclick="if(event.target===this)closeAnniversary()">
+<div class="modal">
+<h3 id="annivTitle">添加 · 纪念日 &amp; 生日</h3>
+<div class="field"><label>名称 *</label><input id="av_name" placeholder="例如：张教授生日 / 结婚纪念日"/></div>
+<div class="row">
+<div class="field" style="margin:0;flex:1">
+<label>类型</label>
+<select id="av_type">
+<option value="birthday">🎂 生日</option>
+<option value="anniversary">💝 纪念日</option>
+<option value="important">📌 重要日期</option>
+</select>
+</div>
+<div class="field" style="margin:0;flex:1">
+<label>日期 (MM-DD)</label>
+<input id="av_date" maxlength="5" placeholder="例如：07-15"/>
+</div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1">
+<label>起始年份(可选)</label>
+<input id="av_since" placeholder="如 2020，用于算第几周年/岁数" type="number"/>
+</div>
+<div class="field" style="margin:0;flex:1">
+<label>提前准备</label>
+<select id="av_remind"><option value="7">提前 7 天</option><option value="14">提前 14 天</option><option value="30">提前 30 天</option></select>
+</div>
+</div>
+<div class="field"><label>备注</label><textarea id="av_note" placeholder="礼物偏好、庆祝安排、重要事项…"></textarea></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeAnniversary()">取消</button>
+<button class="btn primary" onclick="submitAnniversary()">保存</button>
+</div>
+</div>
+</div>
+<div class="mask" id="fundMask" onclick="if(event.target===this)closeFund()">
+<div class="modal">
+<h3 id="fundTitle">添加基金</h3>
+<div class="field"><label>基金名称 *</label><input id="fu_name" placeholder="例如：易方达蓝筹精选"/></div>
+<div class="field"><label>基金代码</label><input id="fu_code" placeholder="如 110011"/></div>
+<div class="field"><label>类型</label><select id="fu_type"><option>股票型</option><option>混合型</option><option>指数型</option><option>债券型</option><option>货币型</option><option>QDII</option><option>其他</option></select></div>
+<div class="row">
+<div class="field" style="margin:0">
+<label>持仓份额(可选)</label>
+<input id="fu_shares" min="0" placeholder="如 1000" step="0.0001" type="number"/>
+</div>
+<div class="field" style="margin:0">
+<label>成本净值(可选)</label>
+<input id="fu_cost" min="0" placeholder="买入时净值" step="0.0001" type="number"/>
+</div>
+</div>
+<div class="modal-acts">
+<button class="btn" onclick="closeFund()">取消</button>
+<button class="btn primary" onclick="submitFund()">保存</button>
+</div>
+</div>
+</div>
+<!-- nav record modal -->
+<div class="mask" id="navMask" onclick="if(event.target===this)closeNav()">
+<div class="modal">
+<h3>记录净值</h3>
+<div class="field"><label>日期</label><input id="nv_date" type="date"/></div>
+<div class="field"><label>净值 *</label><input id="nv_nav" min="0" placeholder="如 1.2345" step="0.0001" type="number"/></div>
+<input id="nv_fund" type="hidden"/>
+<div class="modal-acts">
+<button class="btn" onclick="closeNav()">取消</button>
+<button class="btn primary" onclick="submitNav()">保存</button>
+</div>
+</div>
+</div>
+<!-- weight record modal -->
+<div class="mask" id="weightMask" onclick="if(event.target===this)closeWeight()">
+<div class="modal">
+<h3 id="weightTitle">记录体重</h3>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>日期 *</label><input id="wt_date" type="date"/></div>
+<div class="field" style="margin:0;flex:1"><label>体重 (kg) *</label><input id="wt_weight" min="0" placeholder="如 68.5" step="0.1" type="number"/></div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>体脂率 (%)</label><input id="wt_fat" min="0" placeholder="如 18.5" step="0.1" type="number"/></div>
+<div class="field" style="margin:0;flex:1"><label>腰围 (cm)</label><input id="wt_waist" min="0" placeholder="如 80" step="0.1" type="number"/></div>
+</div>
+<div class="field"><label>备注</label><textarea id="wt_note" placeholder="当天感受、饮食、训练…"></textarea></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeWeight()">取消</button>
+<button class="btn primary" onclick="submitWeight()">保存</button>
+</div>
+</div>
+</div>
+<!-- sport plan modal -->
+<div class="mask" id="planMask" onclick="if(event.target===this)closePlan()">
+<div class="modal">
+<h3 id="planTitle">添加计划</h3>
+<div class="row">
+<div class="field" style="margin:0;flex:1">
+<label>运动类型</label>
+<select id="plan_type"><option>跑步</option><option>健身</option><option>游泳</option><option>骑行</option><option>球类</option><option>瑜伽</option><option>其他</option></select>
+</div>
+<div class="field" style="margin:0;flex:1">
+<label>目标时长(分钟)</label>
+<input id="plan_minutes" min="0" placeholder="如 45" type="number"/>
+</div>
+</div>
+<div class="field"><label>备注</label><textarea id="plan_note" placeholder="如：操场 5 圈 / 胸部+三头"></textarea></div>
+<div class="modal-acts">
+<button class="btn" onclick="closePlan()">取消</button>
+<button class="btn primary" onclick="submitPlan()">保存</button>
+</div>
+</div>
+</div>
+<!-- health goals modal -->
+<div class="mask" id="healthGoalMask" onclick="if(event.target===this)closeHealthGoal()">
+<div class="modal" style="max-width:520px">
+<h3>调整健康目标</h3>
+<div class="hint" style="margin-top:0;margin-bottom:14px">目标是帮助安排节奏，不是考核。请按当前生活状态设置，之后随时可以调整。</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>每周运动时长（分钟）</label><input id="hg_minutes" min="1" placeholder="150" step="5" type="number"/></div>
+<div class="field" style="margin:0;flex:1"><label>每周运动次数</label><input id="hg_sessions" min="1" placeholder="3" step="1" type="number"/></div>
+</div>
+<div class="field"><label>目标体重（kg，可选）</label><input id="hg_target_weight" min="0" placeholder="不设置也可以" step="0.1" type="number"/></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeHealthGoal()">取消</button>
+<button class="btn primary" onclick="submitHealthGoals()">保存目标</button>
+</div>
+</div>
+</div>
+<!-- finance record modal -->
+<div class="mask" id="financeMask" onclick="if(event.target===this)closeFinance()">
+<div class="modal">
+<h3 id="finTitle">记一笔收支</h3>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>类型</label><select id="fn_type"><option value="income">💚 收入</option><option value="expense">💸 支出</option></select></div>
+<div class="field" style="margin:0;flex:1"><label>金额 (元) *</label><input id="fn_amount" min="0" placeholder="如 68.50" step="0.01" type="number"/></div>
+</div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>日期 *</label><input id="fn_date" type="date"/></div>
+<div class="field" style="margin:0;flex:1"><label>分类 / 来源</label><input id="fn_category" list="finCats" placeholder="如 工资 / 理财 / 餐饮 / 房租"/><datalist id="finCats"><option value="工资"></option><option value="理财收益"></option><option value="餐饮"></option><option value="房租"></option><option value="交通"></option><option value="购物"></option><option value="医疗"></option><option value="教育"></option><option value="娱乐"></option><option value="其他"></option></datalist></div>
+</div>
+<details class="form-more">
+<summary>更多信息与周期设置</summary>
+<div class="form-more-body">
+<div class="field"><label>关联科研项目</label>
+<select id="fn_rproject"><option value="">— 不关联项目 —</option></select>
+</div>
+<div class="field"><label>关联出行</label>
+<select id="fn_travel"><option value="">— 不关联出行 —</option></select>
+</div>
+<div class="field"><label>备注</label><textarea id="fn_note" placeholder="对方 / 用途 / 说明…"></textarea></div>
+<div class="field"><label>周期账单</label><select id="fn_recur"><option value="none">不重复</option><option value="month">每月提醒确认</option><option value="year">每年提醒确认</option></select><div class="field-help">未来账单只作为待确认计划，不会提前计入收支和资产。</div></div>
+</div>
+</details>
+<div class="modal-acts">
+<button class="btn" onclick="closeFinance()">取消</button>
+<button class="btn primary" onclick="submitFinance()">保存</button>
+</div>
+</div>
+</div>
+<!-- finance budget modal -->
+<div class="mask" id="financeBudgetMask" onclick="if(event.target===this)closeFinanceBudget()">
+<div class="modal">
+<h3>设置月度预算</h3>
+<div class="field"><label>本月总支出预算（元）</label><input id="fb_total" min="0" placeholder="如 6000" step="1" type="number"/></div>
+<div class="field"><label>分类预算（可选）</label><textarea id="fb_categories" placeholder="每行一个分类，例如：&#10;餐饮: 1500&#10;交通: 500&#10;购物: 1000"></textarea><div class="field-help">支持中文冒号或英文冒号；未填写的分类仍会计入总预算。</div></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeFinanceBudget()">取消</button>
+<button class="btn primary" onclick="submitFinanceBudget()">保存预算</button>
+</div>
+</div>
+</div>
+<!-- habit modal -->
+<div class="mask" id="habitMask" onclick="if(event.target===this)closeHabit()">
+<div class="modal">
+<h3 id="habitTitle">新建习惯</h3>
+<div class="field"><label>习惯名称 *</label><input id="h_name" placeholder="如 阅读 / 拉伸 / 整理桌面"/></div>
+<div class="row">
+<div class="field" style="margin:0;flex:1"><label>计划方式</label><select id="h_freq" onchange="habitFreqChanged()"><option value="daily">按星期安排</option><option value="weekly">每周完成几次</option></select></div>
+<div class="field" style="margin:0;flex:1"><label>状态</label><select id="h_status"><option value="active">正在保持</option><option value="paused">暂时停一停</option></select></div>
+</div>
+<div class="field" id="h_days_box"><label>安排在哪些天</label><div class="habit-day-picks"><label><input id="h_day_0" type="checkbox"/>一</label><label><input id="h_day_1" type="checkbox"/>二</label><label><input id="h_day_2" type="checkbox"/>三</label><label><input id="h_day_3" type="checkbox"/>四</label><label><input id="h_day_4" type="checkbox"/>五</label><label><input id="h_day_5" type="checkbox"/>六</label><label><input id="h_day_6" type="checkbox"/>日</label></div></div>
+<div class="field" id="h_target_box"><label>每周目标次数</label><input id="h_target" max="7" min="1" placeholder="如 3" type="number"/></div>
+<div class="field"><label>最小行动</label><input id="h_minimum" placeholder="例如：只读 2 页 / 拉伸 5 分钟"/><div class="field-help">状态不好时，做到这一步就算完成。</div></div>
+<div class="field"><label>触发提醒（可选）</label><input id="h_cue" placeholder="例如：晚饭后 / 打开电脑前"/></div>
+<div class="field"><label>为什么想保持（可选）</label><textarea id="h_why" placeholder="给未来的自己一句简单提醒"></textarea></div>
+<div class="modal-acts"><button class="btn" onclick="closeHabit()">取消</button><button class="btn primary" onclick="submitHabit()">保存</button></div>
+</div>
+</div>
+<!-- day modal -->
+<div class="mask" id="dayMask" onclick="if(event.target===this)closeDay()">
+<div class="modal"><div id="dayBody"></div></div>
+</div>
+<!-- sync modal -->
+<div class="mask" id="syncMask" onclick="if(event.target===this)closeSync()">
+<div class="modal">
+<h3>☁ 同步设置（GitHub Gist）</h3>
+<div class="field"><label>GitHub Token（需 gist 权限）</label>
+<div style="display:flex;gap:8px">
+<input autocomplete="off" id="s_token" placeholder="ghp_xxx 或 github_pat_xxx" style="flex:1" type="password"/>
+<button class="btn" onclick="toggleToken(this)" type="button">👁 显示</button>
+<button class="btn" onclick="copyToken()" type="button">📋 复制</button>
+</div>
+</div>
+<div class="field"><label>Gist ID（留空则首次同步自动创建）</label><input autocomplete="off" id="s_gist" placeholder="如 a1b2c3d4e5f6..."/></div>
+<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin-bottom:12px;cursor:pointer">
+<input id="s_enabled" type="checkbox"/> 启用自动同步（改动后自动上传）
+    </label>
+<div class="hint">① 在 GitHub → <b>Settings → Developer settings → Personal access tokens</b> 生成一个有 <b>gist</b> 权限的 Token；<br/>② Token 仅保存在本机浏览器，用于读写你自己的私密 Gist；<br/>③ 开启后：本地改动约 0.8 秒自动上传，页面会<b>每 60 秒自动检查</b>远端更新并无感拉取（同浏览器多标签页也会即时互相同步）；<br/>④ 任意设备用同一 <b>Token + Gist ID</b> 即可同步同一份数据（最后保存方优先）。</div>
+<div class="modal-acts">
+<button class="btn" onclick="openGist()">在 GitHub 查看</button>
+<button class="btn" onclick="closeSync()">取消</button>
+<button class="btn" onclick="doSyncNow()">立即同步</button>
+<button class="btn primary" onclick="saveSync()">保存</button>
+</div>
+</div>
+</div>
+<input accept=".json" id="fileInput" onchange="doImport(event)" style="display:none" type="file"/>
+<div class="mask" id="bakMask" onclick="if(event.target===this)closeBak()">
+<div class="modal">
+<h3>🕑 本地备份与回滚</h3>
+<div class="hint">每次改动会自动在浏览器里存一份带时间戳的快照（最多保留 30 份），用于 Gist 同步异常或误删时回滚。备份只存在本机，不上传云端。</div>
+<div class="list" id="bakList" style="margin-top:14px;max-height:46vh;overflow:auto"></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeBak()">关闭</button>
+<button class="btn primary" onclick="bakNow()">＋ 立即备份</button>
+</div>
+</div>
+</div>
+
+<!-- v4 命令面板 (Cmd+K) -->
+<div class="mask" id="cmdkMask" onclick="if(event.target===this)closeCmdK()">
+<div aria-label="命令面板" aria-modal="true" class="modal" role="dialog">
+<h3>⌨️ 命令面板 <span style="font-size:12px;color:var(--muted);font-weight:400">⌘/Ctrl + K</span></h3>
+<div class="hint" style="margin-top:0;margin-bottom:10px">输入动作关键词或任意标题。识别 <b>due:明天</b> / <b>!high</b> / <b>#标签</b> / <b>cat:work</b>。</div>
+<div class="field" style="margin:0">
+<input autocomplete="off" id="cmdk_q" placeholder="如：明早体检 due:明天 #健康 / 添加基金 / 同步数据…"/>
+</div>
+<div class="cmk-results" id="cmdk_list" style="margin-top:10px"></div>
+<div class="modal-acts">
+<button class="btn" onclick="closeCmdK()">关闭 (Esc)</button>
+<button class="btn primary" onclick="runCmdK()">执行 (Enter)</button>
+</div>
+</div>
+</div>
+<!-- v4 操作手册 (?) -->
+<div class="mask" id="cheatMask" onclick="if(event.target===this)closeCheatsheet()">
+<div aria-label="操作手册" aria-modal="true" class="modal" role="dialog" style="max-width:640px">
+<h3>📘 快捷键 &amp; 高频操作</h3>
+<div style="font-size:13.5px;line-height:1.85;padding:6px 4px">
+<div><kbd>⌘/Ctrl + K</kbd> 命令面板（创建 / 跳转）</div>
+<div><kbd>n</kbd> 新建事项</div>
+<div><kbd>/</kbd> 聚焦搜索</div>
+<div><kbd>m</kbd> 折叠/展开侧栏（移动端）</div>
+<div><kbd>g</kbd> + <kbd>o/r/w/l/s/f/n/h/c</kbd> 跳转到概览/复盘/工作/生活/运动/金融/热榜/习惯/日历</div>
+<div><kbd>?</kbd> 本说明  ·  <kbd>Esc</kbd> 关闭弹层</div>
+<div style="margin-top:10px;color:var(--muted);font-size:12.5px">表单意外关闭？别慌：v4 自动暂存草稿 30 分钟，下次打开同名表单会询问是否恢复。</div>
+</div>
+<div class="modal-acts"><button class="btn primary" onclick="closeCheatsheet()">知道了</button></div>
+</div>
+</div>
+<script src="./assets/app.js"></script></body>
+</html>
