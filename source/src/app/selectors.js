@@ -66,12 +66,23 @@
     var state=uiState();
     var items=(fullData.items||[]);
     var filtered=filteredItems('work');
+    var projects=(fullData.projects||[]);
+    var tmpItems=items.filter(function(i){ return i.cat==='work' && !i.projectId; });
+    var agendaItems=items.filter(function(i){ return i.cat==='work' && i.due; }).slice().sort(function(a,b){ return a.due.localeCompare(b.due); });
     return {
       state: state,
-      projects: (fullData.projects||[]),
-      tmpItems: items.filter(function(i){ return i.cat==='work' && !i.projectId; }),
-      agendaItems: items.filter(function(i){ return i.cat==='work' && i.due; }).slice().sort(function(a,b){ return a.due.localeCompare(b.due); }),
+      projects: projects,
+      activeProjects: projects.filter(function(p){ return (p.status||'active')!=='done'; }),
+      completedProjects: projects.filter(function(p){ return p.status==='done'; }),
+      tmpItems: tmpItems,
+      tmpOpenItems: tmpItems.filter(function(i){ return i.status!=='done'; }),
+      tmpCompletedItems: tmpItems.filter(function(i){ return i.status==='done'; }),
+      agendaItems: agendaItems,
+      agendaOpenItems: agendaItems.filter(function(i){ return i.status!=='done'; }),
+      agendaCompletedItems: agendaItems.filter(function(i){ return i.status==='done'; }),
       filteredItems: filtered,
+      openFilteredItems: filtered.filter(function(i){ return i.status!=='done'; }),
+      completedFilteredItems: filtered.filter(function(i){ return i.status==='done'; }),
       workView: state.workView || global.workView || 'list',
       collapseState: global.collapseState || {}
     };

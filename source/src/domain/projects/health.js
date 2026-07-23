@@ -16,9 +16,13 @@
     var acc = (estSum && actSum) ? (actSum / estSum * 100) : null;
     var health = (project.status === 'done') ? 'green' : (overdue >= 3 || riskMs > 0 ? 'red' : overdue > 0 ? 'amber' : 'green');
     var healthMap = { green:['#10b981','健康'], amber:['#f59e0b','注意'], red:['#ef4444','风险'] };
+    var openItems = items.filter(function(i){ return i.status !== 'done'; });
+    var completedItems = items.filter(function(i){ return i.status === 'done'; });
     return {
       project: project,
       items: items,
+      openItems: openItems,
+      completedItems: completedItems,
       milestones: milestones,
       milestoneDone: msDone,
       done: done,
@@ -32,7 +36,7 @@
       accuracy: acc,
       health: health,
       healthMeta: healthMap[health],
-      sortedItems: items.slice().sort(function(a,b){ return (a.status==='done') - (b.status==='done'); })
+      sortedItems: openItems.concat(completedItems)
     };
   }
   global.WorkbenchProjectHealth = { summarizeProject: summarizeProject };

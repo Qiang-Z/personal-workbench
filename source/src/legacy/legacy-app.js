@@ -215,7 +215,7 @@ function v4CloseAnyModal(){
       rprojMask:closeRProj,fundMask:closeFund,navMask:closeNav,bookMask:closeBook,
       travelMask:closeTravel,annivMask:closeAnniversary,weightMask:closeWeight,planMask:closePlan,
       financeMask:closeFinance,habitMask:closeHabit,newsMask:closeNewsMgr,
-      cmdkMask:closeCmdK,cheatMask:closeCheatsheet,syncMask:closeSync,bakMask:closeBak,
+      cmdkMask:closeCmdK,cheatMask:closeCheatsheet,syncMask:closeSync,bakMask:closeBak,cloudBackupMask:closeCloudBackup,
       dayMask:closeDay})[m.id];
     if(fn) try{fn();}catch(e){m.classList.remove('show');}
   });
@@ -318,6 +318,7 @@ function cmdkParse(q){
 var KM_ACTIONS=[
   {kw:['添加基金','基金','添加股票'],a:'fund'},
   {kw:['同步数据','同步到 gist','github','同步'],a:'sync'},
+  {kw:['网盘备份','云备份','备份到网盘'],a:'cloudbackup'},
   {kw:['立即备份','手动备份','备份'],a:'backup'},
   {kw:['深色','浅色','切换主题'],a:'theme'},
   {kw:['帮助','操作手册','快捷键'],a:'cheat'},
@@ -325,7 +326,7 @@ var KM_ACTIONS=[
   {kw:['导入','导入数据'],a:'import'},
   {kw:['日历','日'],a:'cal'},
 ];
-var KM_LABEL={fund:'添加基金',sync:'立即 Gist 同步',backup:'立即本地备份',theme:'切换深浅色',cheat:'查看操作手册',export:'导出数据',import:'导入数据',cal:'跳转到日历'};
+var KM_LABEL={fund:'添加基金',sync:'立即 Gist 同步',cloudbackup:'打开网盘文件夹备份',backup:'立即本地备份',theme:'切换深浅色',cheat:'查看操作手册',export:'导出数据',import:'导入数据',cal:'跳转到日历'};
 function renderCmdK(){
   const q=(document.getElementById('cmdk_q').value||'').trim();
   const list=document.getElementById('cmdk_list');
@@ -346,6 +347,7 @@ function runCmdIndex(i){
   if(r.kind==='action'){
     if(r.action==='fund') openFundForm();
     else if(r.action==='sync') syncPush();
+    else if(r.action==='cloudbackup') openCloudBackup();
     else if(r.action==='backup'){pushBackup(true);renderBak();toast('已立即备份 ✓');}
     else if(r.action==='theme') toggleTheme();
     else if(r.action==='cheat') openCheatsheet();
@@ -539,7 +541,7 @@ function persist(){
   catch(e){console.warn('localStorage 写入失败，将依赖 IndexedDB',e);}
   idbPut(data).catch(()=>{});
 }
-function save(){data.__savedAt=Date.now();persist();schedulePush();pushBackup();}
+function save(){data.__savedAt=Date.now();persist();schedulePush();pushBackup();if(window.WorkbenchCloudBackup)window.WorkbenchCloudBackup.schedule();}
 /* ---------- 本地自动备份（浏览器内快照，可回滚） ---------- */
 const BAK_KEY='workbench_backups_v1';
 const BAK_MAX=30;
@@ -852,7 +854,7 @@ function renderOverview(){
       &nbsp;&nbsp;– <b>纪念日 & 生日</b>：记录名称、类型（生日 🎂 / 纪念日 💝）与日期（MM-DD），按<b>距下次天数</b>自动排序与倒计时，当天在日历与日详情自动标注提醒。<br>
     • 每个模块都有<b>日历 + 按日期的日程</b>；顶部「📅 日历」是跨模块总览。<br>
     • 点日历某天可看/加当天安排；勾选方框标记完成；✏️编辑 🗑️删除。<br>
-    • <b>导出</b>备份 JSON，<b>导入</b>恢复；数据仅存本机浏览器，不上传。</div>`;
+    • <b>数据保护</b>共有四种方式：本地快照用于快速回滚，导出/导入 JSON 用于手动归档，网盘文件夹用于定期备份，GitHub Gist 用于跨设备同步。网盘备份需先安装网盘电脑客户端，再到“更多 → 网盘文件夹备份”选择它的同步目录。</div>`;
   return html;
 }
 
