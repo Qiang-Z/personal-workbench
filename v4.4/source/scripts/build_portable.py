@@ -14,6 +14,7 @@ ORDER = [
     'data/repository.js',
     'data/import-export.js',
     'data/backup/backup-repo.js',
+    'data/backup/cloud-folder.js',
     'data/sync/sync-adapter.js',
     'domain/tasks/recurrence.js',
     'domain/projects/health.js',
