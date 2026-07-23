@@ -217,7 +217,7 @@ function v4CloseAnyModal(){
       rprojMask:closeRProj,fundMask:closeFund,navMask:closeNav,bookMask:closeBook,
       travelMask:closeTravel,annivMask:closeAnniversary,weightMask:closeWeight,planMask:closePlan,
       financeMask:closeFinance,habitMask:closeHabit,newsMask:closeNewsMgr,
-      cmdkMask:closeCmdK,cheatMask:closeCheatsheet,syncMask:closeSync,bakMask:closeBak,
+      cmdkMask:closeCmdK,cheatMask:closeCheatsheet,syncMask:closeSync,bakMask:closeBak,cloudBackupMask:closeCloudBackup,
       dayMask:closeDay})[m.id];
     if(fn) try{fn();}catch(e){m.classList.remove('show');}
   });
@@ -320,6 +320,7 @@ function cmdkParse(q){
 var KM_ACTIONS=[
   {kw:['添加基金','基金','添加股票'],a:'fund'},
   {kw:['同步数据','同步到 gist','github','同步'],a:'sync'},
+  {kw:['网盘备份','云备份','备份到网盘'],a:'cloudbackup'},
   {kw:['立即备份','手动备份','备份'],a:'backup'},
   {kw:['深色','浅色','切换主题'],a:'theme'},
   {kw:['帮助','操作手册','快捷键'],a:'cheat'},
@@ -327,7 +328,7 @@ var KM_ACTIONS=[
   {kw:['导入','导入数据'],a:'import'},
   {kw:['日历','日'],a:'cal'},
 ];
-var KM_LABEL={fund:'添加基金',sync:'立即 Gist 同步',backup:'立即本地备份',theme:'切换深浅色',cheat:'查看操作手册',export:'导出数据',import:'导入数据',cal:'跳转到日历'};
+var KM_LABEL={fund:'添加基金',sync:'立即 Gist 同步',cloudbackup:'打开网盘文件夹备份',backup:'立即本地备份',theme:'切换深浅色',cheat:'查看操作手册',export:'导出数据',import:'导入数据',cal:'跳转到日历'};
 function renderCmdK(){
   const q=(document.getElementById('cmdk_q').value||'').trim();
   const list=document.getElementById('cmdk_list');
@@ -348,6 +349,7 @@ function runCmdIndex(i){
   if(r.kind==='action'){
     if(r.action==='fund') openFundForm();
     else if(r.action==='sync') syncPush();
+    else if(r.action==='cloudbackup') openCloudBackup();
     else if(r.action==='backup'){pushBackup(true);renderBak();toast('已立即备份 ✓');}
     else if(r.action==='theme') toggleTheme();
     else if(r.action==='cheat') openCheatsheet();
@@ -541,7 +543,7 @@ function persist(){
   catch(e){console.warn('localStorage 写入失败，将依赖 IndexedDB',e);}
   idbPut(data).catch(()=>{});
 }
-function save(){data.__savedAt=Date.now();persist();schedulePush();pushBackup();}
+function save(){data.__savedAt=Date.now();persist();schedulePush();pushBackup();if(window.WorkbenchCloudBackup)window.WorkbenchCloudBackup.schedule();}
 /* ---------- 本地自动备份（浏览器内快照，可回滚） ---------- */
 const BAK_KEY='workbench_backups_v1';
 const BAK_MAX=30;
@@ -854,7 +856,7 @@ function renderOverview(){
       &nbsp;&nbsp;– <b>纪念日 & 生日</b>：记录名称、类型（生日 🎂 / 纪念日 💝）与日期（MM-DD），按<b>距下次天数</b>自动排序与倒计时，当天在日历与日详情自动标注提醒。<br>
     • 每个模块都有<b>日历 + 按日期的日程</b>；顶部「📅 日历」是跨模块总览。<br>
     • 点日历某天可看/加当天安排；勾选方框标记完成；✏️编辑 🗑️删除。<br>
-    • <b>导出</b>备份 JSON，<b>导入</b>恢复；数据仅存本机浏览器，不上传。</div>`;
+    • <b>数据保护</b>共有四种方式：本地快照用于快速回滚，导出/导入 JSON 用于手动归档，网盘文件夹用于定期备份，GitHub Gist 用于跨设备同步。网盘备份需先安装网盘电脑客户端，再到“更多 → 网盘文件夹备份”选择它的同步目录。</div>`;
   return html;
 }
 
@@ -3523,6 +3525,393 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
   global.bakNow = function(){ api.create(true); if(typeof global.renderBak === 'function') global.renderBak(); };
 })(window);
 
+/* ===== FILE: data/backup/cloud-folder.js ===== */
+(function(global){
+  var CFG_KEY='workbench_cloud_backup_cfg_v1';
+  var DB_NAME='workbench_cloud_backup_v1';
+  var DB_STORE='handles';
+  var HANDLE_KEY='backup-directory';
+  var BACKUP_DIR='个人工作台备份';
+  var LATEST_FILE='个人工作台_最新.json';
+  var MAX_HISTORY=30;
+  var AUTO_INTERVAL=24*60*60*1000;
+  var timer=null;
+  var currentHandle=null;
+  var busy=false;
+  var suspended=false;
+
+  function defaults(){
+    return { enabled:false, auto:true, dirName:'', lastBackupAt:0, lastFileName:'', lastError:'' };
+  }
+  function loadConfig(){
+    try{
+      var saved=global.localStorage&&global.localStorage.getItem(CFG_KEY);
+      return Object.assign(defaults(),saved?JSON.parse(saved):{});
+    }catch(e){ return defaults(); }
+  }
+  var config=loadConfig();
+  function saveConfig(){
+    try{ if(global.localStorage) global.localStorage.setItem(CFG_KEY,JSON.stringify(config)); }catch(e){}
+    return config;
+  }
+  function supported(){
+    return typeof global.showDirectoryPicker==='function';
+  }
+  function pad(value){ return String(value).padStart(2,'0'); }
+  function makeBackupFileName(now){
+    var date=now instanceof Date?now:new Date(now||Date.now());
+    return '个人工作台_'+date.getFullYear()+'-'+pad(date.getMonth()+1)+'-'+pad(date.getDate())
+      +'_'+pad(date.getHours())+pad(date.getMinutes())+pad(date.getSeconds())+'.json';
+  }
+  function isHistoryFile(name){
+    return /^个人工作台_\d{4}-\d{2}-\d{2}_\d{6}\.json$/.test(String(name||''));
+  }
+  function snapshot(){
+    var source=global.WorkbenchRepository&&global.WorkbenchRepository.getSnapshot
+      ? global.WorkbenchRepository.getSnapshot()
+      : JSON.parse(JSON.stringify(global.data||{}));
+    var copy=JSON.parse(JSON.stringify(source||{}));
+    delete copy.__savedAt;
+    copy.__backup={
+      format:'personal-workbench-cloud-folder-v1',
+      appVersion:'4.4',
+      createdAt:new Date().toISOString()
+    };
+    return copy;
+  }
+  function parseBackupPayload(payload){
+    var parsed=payload&&payload.data&&Array.isArray(payload.data.items)?payload.data:payload;
+    if(!parsed||!Array.isArray(parsed.items)) throw new Error('这不是有效的个人工作台备份文件');
+    return parsed;
+  }
+  function recordCount(payload){
+    var keys=['items','projects','funds','papers','patents','rprojects','books','travels','anniversaries','weights','finances','habits'];
+    return keys.reduce(function(sum,key){ return sum+(Array.isArray(payload&&payload[key])?payload[key].length:0); },0);
+  }
+  function shouldAutoBackup(now,lastBackupAt){
+    return !lastBackupAt||now-lastBackupAt>=AUTO_INTERVAL;
+  }
+  function idbOpen(){
+    return new Promise(function(resolve,reject){
+      if(!global.indexedDB) return reject(new Error('当前浏览器无法记住文件夹'));
+      var req=global.indexedDB.open(DB_NAME,1);
+      req.onupgradeneeded=function(){
+        var db=req.result;
+        if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+      };
+      req.onsuccess=function(){ resolve(req.result); };
+      req.onerror=function(){ reject(req.error||new Error('无法打开文件夹记录')); };
+    });
+  }
+  async function storeHandle(handle){
+    var db=await idbOpen();
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DB_STORE,'readwrite');
+      tx.objectStore(DB_STORE).put(handle,HANDLE_KEY);
+      tx.oncomplete=function(){ resolve(handle); };
+      tx.onerror=function(){ reject(tx.error||new Error('无法记住文件夹')); };
+    });
+  }
+  async function readHandle(){
+    if(currentHandle) return currentHandle;
+    try{
+      var db=await idbOpen();
+      currentHandle=await new Promise(function(resolve,reject){
+        var tx=db.transaction(DB_STORE,'readonly');
+        var req=tx.objectStore(DB_STORE).get(HANDLE_KEY);
+        req.onsuccess=function(){ resolve(req.result||null); };
+        req.onerror=function(){ reject(req.error||new Error('无法读取文件夹记录')); };
+      });
+    }catch(e){ currentHandle=null; }
+    return currentHandle;
+  }
+  async function forgetHandle(){
+    currentHandle=null;
+    try{
+      var db=await idbOpen();
+      await new Promise(function(resolve,reject){
+        var tx=db.transaction(DB_STORE,'readwrite');
+        tx.objectStore(DB_STORE).delete(HANDLE_KEY);
+        tx.oncomplete=resolve;
+        tx.onerror=function(){ reject(tx.error); };
+      });
+    }catch(e){}
+  }
+  async function ensurePermission(handle,request){
+    if(!handle) return false;
+    var opts={mode:'readwrite'};
+    if(typeof handle.queryPermission!=='function') return true;
+    if(await handle.queryPermission(opts)==='granted') return true;
+    if(request&&typeof handle.requestPermission==='function') return (await handle.requestPermission(opts))==='granted';
+    return false;
+  }
+  async function writeFile(directory,name,text){
+    var fileHandle=await directory.getFileHandle(name,{create:true});
+    var writable=await fileHandle.createWritable();
+    await writable.write(text);
+    await writable.close();
+  }
+  async function pruneHistory(directory){
+    if(typeof directory.values!=='function'||typeof directory.removeEntry!=='function') return;
+    var names=[];
+    for await (var entry of directory.values()){
+      if(entry&&entry.kind==='file'&&isHistoryFile(entry.name)) names.push(entry.name);
+    }
+    names.sort();
+    while(names.length>MAX_HISTORY) await directory.removeEntry(names.shift());
+  }
+  async function writeBackupToDirectory(root,payload,now){
+    var target=await root.getDirectoryHandle(BACKUP_DIR,{create:true});
+    var fileName=makeBackupFileName(now);
+    var text=JSON.stringify(payload,null,2);
+    await writeFile(target,fileName,text);
+    await writeFile(target,LATEST_FILE,text);
+    await pruneHistory(target);
+    return { fileName:fileName, directory:target, bytes:text.length };
+  }
+  async function listFiles(root){
+    var target=await root.getDirectoryHandle(BACKUP_DIR,{create:false});
+    var result=[];
+    if(typeof target.values!=='function') return result;
+    for await (var entry of target.values()){
+      if(!entry||entry.kind!=='file'||!isHistoryFile(entry.name)) continue;
+      var file=await entry.getFile();
+      result.push({name:entry.name,size:file.size||0,lastModified:file.lastModified||0});
+    }
+    return result.sort(function(a,b){ return b.name.localeCompare(a.name); }).slice(0,MAX_HISTORY);
+  }
+  async function backup(requestPermission){
+    if(busy||suspended) return null;
+    busy=true;
+    renderStatus('busy','正在写入备份…');
+    try{
+      var handle=await readHandle();
+      if(!handle) throw new Error('请先选择网盘同步文件夹');
+      if(!(await ensurePermission(handle,!!requestPermission))) throw new Error('需要重新授权访问备份文件夹');
+      var result=await writeBackupToDirectory(handle,snapshot(),new Date());
+      config.enabled=true;
+      config.dirName=handle.name||config.dirName||'已选择文件夹';
+      config.lastBackupAt=Date.now();
+      config.lastFileName=result.fileName;
+      config.lastError='';
+      saveConfig();
+      renderStatus('ok','备份成功');
+      return result;
+    }catch(e){
+      config.lastError=e&&e.message?e.message:'备份失败';
+      saveConfig();
+      renderStatus('err',config.lastError);
+      throw e;
+    }finally{
+      busy=false;
+      if(global.document&&global.document.getElementById('cloudBackupMask')&&global.document.getElementById('cloudBackupMask').classList.contains('show')) render();
+    }
+  }
+  function schedule(){
+    if(suspended||!config.enabled||!config.auto||!shouldAutoBackup(Date.now(),config.lastBackupAt)) return;
+    clearTimeout(timer);
+    timer=setTimeout(function(){ backup(false).catch(function(){}); },1500);
+  }
+  function formatDate(ts){
+    if(!ts) return '尚未备份';
+    try{ return new Date(ts).toLocaleString(); }catch(e){ return '尚未备份'; }
+  }
+  function formatSize(size){
+    if(size<1024) return size+' B';
+    if(size<1024*1024) return (size/1024).toFixed(1)+' KB';
+    return (size/1024/1024).toFixed(1)+' MB';
+  }
+  function renderStatus(state,text){
+    var node=global.document&&global.document.getElementById('cloudBackupStatus');
+    if(!node) return;
+    node.className='cloud-backup-status '+state;
+    node.innerHTML='<span></span><div><b>'+esc(text)+'</b><small>'+esc(config.dirName?config.dirName+'/'+BACKUP_DIR:'尚未选择文件夹')+'</small></div>';
+  }
+  function esc(value){
+    return global.esc?global.esc(value):String(value==null?'':value).replace(/[&<>"]/g,function(c){return '&#'+c.charCodeAt(0)+';';});
+  }
+  async function render(){
+    var body=global.document&&global.document.getElementById('cloudBackupBody');
+    if(!body) return;
+    var selectBtn=global.document.getElementById('cloudBackupSelect');
+    var nowBtn=global.document.getElementById('cloudBackupNow');
+    var disconnectBtn=global.document.getElementById('cloudBackupDisconnect');
+    if(!supported()){
+      if(selectBtn) selectBtn.disabled=true;
+      if(nowBtn) nowBtn.disabled=true;
+      if(disconnectBtn) disconnectBtn.style.display='none';
+      body.innerHTML='<div class="cloud-backup-unsupported"><b>当前浏览器暂不支持文件夹直写</b><p>请使用桌面版 Chrome 或 Edge；你仍可继续使用手动导出和 GitHub Gist。</p></div>';
+      return;
+    }
+    var handle=await readHandle();
+    var connected=!!(config.enabled&&handle);
+    if(selectBtn) selectBtn.textContent=connected?'重新选择文件夹':'选择网盘文件夹';
+    if(nowBtn) nowBtn.disabled=!connected||busy;
+    if(disconnectBtn) disconnectBtn.style.display=connected?'':'none';
+    if(!connected){
+      body.innerHTML='<div id="cloudBackupStatus" class="cloud-backup-status off"><span></span><div><b>尚未连接</b><small>选择 OneDrive、iCloud Drive、Dropbox、百度网盘等同步目录</small></div></div>'
+        +'<div class="cloud-backup-guide"><b>它是备份，不是自动合并</b><p>工作台只写入你选择的文件夹；在其他电脑上选择同一个同步目录后，再手动恢复需要的版本。</p></div>';
+      return;
+    }
+    var granted=await ensurePermission(handle,false);
+    var statusClass=config.lastError?'err':granted?'ok':'warn';
+    var statusText=config.lastError?config.lastError:granted?'已连接':'需要重新授权';
+    body.innerHTML='<div id="cloudBackupStatus" class="cloud-backup-status '+statusClass+'"><span></span><div><b>'+esc(statusText)+'</b><small>'+esc((handle.name||config.dirName)+'/'+BACKUP_DIR)+'</small></div></div>'
+      +'<label class="cloud-backup-auto"><input type="checkbox" '+(config.auto?'checked':'')+' onchange="setCloudBackupAuto(this.checked)"><span><b>每天自动备份</b><small>每次打开和保存时检查，24 小时最多生成一份</small></span></label>'
+      +'<div class="cloud-backup-meta"><span>最近备份</span><b>'+esc(formatDate(config.lastBackupAt))+'</b><small>保留最近 '+MAX_HISTORY+' 份历史，并维护一份“个人工作台_最新.json”</small></div>'
+      +'<div class="cloud-backup-list-head"><b>可恢复版本</b><span id="cloudBackupCount">读取中…</span></div><div id="cloudBackupList" class="cloud-backup-list"><div class="cloud-backup-loading">正在读取备份目录…</div></div>';
+    if(!granted){
+      global.document.getElementById('cloudBackupList').innerHTML='<div class="cloud-backup-loading">点击“立即备份”重新授权后即可查看历史。</div>';
+      return;
+    }
+    try{
+      var files=await listFiles(handle);
+      var count=global.document.getElementById('cloudBackupCount');
+      var list=global.document.getElementById('cloudBackupList');
+      if(count) count.textContent=files.length+' 份';
+      if(list) list.innerHTML=files.length?files.map(function(file){
+        return '<div class="cloud-backup-row"><div><b>'+esc(file.name.replace('个人工作台_','').replace('.json','').replace('_',' '))+'</b><small>'+esc(formatSize(file.size))+'</small></div>'
+          +'<button class="btn small" onclick="restoreCloudBackupFile(\''+encodeURIComponent(file.name)+'\')">恢复</button></div>';
+      }).join(''):'<div class="cloud-backup-loading">还没有历史备份，点击“立即备份”创建第一份。</div>';
+    }catch(e){
+      var listNode=global.document.getElementById('cloudBackupList');
+      if(listNode) listNode.innerHTML='<div class="cloud-backup-loading">暂时无法读取备份目录，请重新选择文件夹。</div>';
+    }
+  }
+  async function connect(){
+    if(!supported()){
+      global.alert('当前浏览器不支持选择文件夹，请使用桌面版 Chrome 或 Edge。');
+      return;
+    }
+    try{
+      var handle=await global.showDirectoryPicker({id:'personal-workbench-cloud-backup',mode:'readwrite',startIn:'documents'});
+      currentHandle=handle;
+      await storeHandle(handle);
+      config.enabled=true;
+      config.dirName=handle.name||'已选择文件夹';
+      config.lastError='';
+      var existing=[];
+      try{ existing=await listFiles(handle); }catch(e){}
+      config.auto=!existing.length;
+      saveConfig();
+      if(existing.length){
+        if(typeof global.toast==='function') global.toast('发现已有备份，请先确认是否需要恢复');
+      }else{
+        await backup(false);
+        if(typeof global.toast==='function') global.toast('网盘文件夹备份已开启 ✓');
+      }
+      await render();
+      if(global.currentCat==='more'&&typeof global.render==='function') global.render();
+    }catch(e){
+      if(e&&e.name==='AbortError') return;
+      global.alert('连接失败：'+(e&&e.message?e.message:'无法访问所选文件夹'));
+      await render();
+    }
+  }
+  async function restoreFile(encodedName){
+    try{
+      var handle=await readHandle();
+      if(!handle||!(await ensurePermission(handle,true))) throw new Error('需要重新授权访问备份文件夹');
+      var name=decodeURIComponent(encodedName);
+      if(!isHistoryFile(name)&&name!==LATEST_FILE) throw new Error('备份文件名无效');
+      var target=await handle.getDirectoryHandle(BACKUP_DIR,{create:false});
+      var fileHandle=await target.getFileHandle(name,{create:false});
+      var file=await fileHandle.getFile();
+      var payload=parseBackupPayload(JSON.parse(await file.text()));
+      if(!global.confirm('恢复“'+name+'”？当前未备份的内容会被覆盖，恢复前会先创建一份本地快照。')) return;
+      if(global.WorkbenchBackupRepo&&global.WorkbenchBackupRepo.create) global.WorkbenchBackupRepo.create(true);
+      else if(typeof global.pushBackup==='function') global.pushBackup(true);
+      suspended=true;
+      if(global.WorkbenchImportExport&&global.WorkbenchImportExport.applyImportedData) global.WorkbenchImportExport.applyImportedData(payload);
+      else{
+        global.data=payload;
+        if(typeof global.save==='function') global.save();
+        if(typeof global.render==='function') global.render();
+      }
+      suspended=false;
+      global.alert('已恢复 '+recordCount(payload)+' 条记录');
+      close();
+    }catch(e){
+      suspended=false;
+      global.alert('恢复失败：'+(e&&e.message?e.message:'无法读取备份'));
+    }
+  }
+  async function disconnect(){
+    if(!global.confirm('断开网盘备份？已写入网盘文件夹的备份不会被删除。')) return;
+    clearTimeout(timer);
+    await forgetHandle();
+    config=defaults();
+    saveConfig();
+    await render();
+    if(global.currentCat==='more'&&typeof global.render==='function') global.render();
+  }
+  function open(){
+    var mask=global.document&&global.document.getElementById('cloudBackupMask');
+    if(mask) mask.classList.add('show');
+    render();
+  }
+  function close(){
+    var mask=global.document&&global.document.getElementById('cloudBackupMask');
+    if(mask) mask.classList.remove('show');
+  }
+  function setAuto(enabled){
+    config.auto=!!enabled;
+    saveConfig();
+    if(config.auto) schedule();
+  }
+  async function manualBackup(){
+    try{
+      await backup(true);
+      if(typeof global.toast==='function') global.toast('已备份到网盘文件夹 ✓');
+    }catch(e){
+      global.alert('备份失败：'+(e&&e.message?e.message:'请重新选择文件夹'));
+    }
+  }
+  function statusSummary(){
+    if(!supported()) return '当前浏览器不支持文件夹备份';
+    if(!config.enabled) return '备份到网盘同步文件夹';
+    return (config.dirName?'已连接 '+config.dirName:'已连接')+(config.lastBackupAt?' · '+formatDate(config.lastBackupAt):'');
+  }
+  async function init(){
+    if(!config.enabled||!config.auto) return;
+    var handle=await readHandle();
+    if(handle&&(await ensurePermission(handle,false))&&shouldAutoBackup(Date.now(),config.lastBackupAt)) schedule();
+  }
+
+  var api={
+    supported:supported,
+    getConfig:function(){ return Object.assign({},config); },
+    makeBackupFileName:makeBackupFileName,
+    isHistoryFile:isHistoryFile,
+    parseBackupPayload:parseBackupPayload,
+    recordCount:recordCount,
+    shouldAutoBackup:shouldAutoBackup,
+    writeBackupToDirectory:writeBackupToDirectory,
+    listFiles:listFiles,
+    connect:connect,
+    backup:backup,
+    schedule:schedule,
+    restoreFile:restoreFile,
+    disconnect:disconnect,
+    render:render,
+    open:open,
+    close:close,
+    setAuto:setAuto,
+    manualBackup:manualBackup,
+    statusSummary:statusSummary,
+    init:init
+  };
+  global.WorkbenchCloudBackup=api;
+  global.openCloudBackup=open;
+  global.closeCloudBackup=close;
+  global.connectCloudBackup=connect;
+  global.cloudBackupNow=manualBackup;
+  global.restoreCloudBackupFile=restoreFile;
+  global.disconnectCloudBackup=disconnect;
+  global.setCloudBackupAuto=setAuto;
+  if(global.document) global.setTimeout(function(){ init().catch(function(){}); },0);
+})(window);
+
 /* ===== FILE: data/sync/sync-adapter.js ===== */
 (function(global){
   function status(state, title){ if(typeof global.syncSetDot === 'function') global.syncSetDot(state, title); }
@@ -3633,9 +4022,13 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
     var acc = (estSum && actSum) ? (actSum / estSum * 100) : null;
     var health = (project.status === 'done') ? 'green' : (overdue >= 3 || riskMs > 0 ? 'red' : overdue > 0 ? 'amber' : 'green');
     var healthMap = { green:['#10b981','健康'], amber:['#f59e0b','注意'], red:['#ef4444','风险'] };
+    var openItems = items.filter(function(i){ return i.status !== 'done'; });
+    var completedItems = items.filter(function(i){ return i.status === 'done'; });
     return {
       project: project,
       items: items,
+      openItems: openItems,
+      completedItems: completedItems,
       milestones: milestones,
       milestoneDone: msDone,
       done: done,
@@ -3649,7 +4042,7 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
       accuracy: acc,
       health: health,
       healthMeta: healthMap[health],
-      sortedItems: items.slice().sort(function(a,b){ return (a.status==='done') - (b.status==='done'); })
+      sortedItems: openItems.concat(completedItems)
     };
   }
   global.WorkbenchProjectHealth = { summarizeProject: summarizeProject };
@@ -4627,6 +5020,15 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
   function kit(){ return global.WorkbenchPanelKit || {}; }
   function selectors(){ return global.WorkbenchSelectors || {}; }
   function model(){ return selectors().workModuleModel ? selectors().workModuleModel() : { state:{}, projects:[], tmpItems:[], agendaItems:[], filteredItems:[], workView:global.workView||'list', collapseState:global.collapseState||{} }; }
+  function countByStatus(items, done){
+    return (items||[]).filter(function(item){ return done ? item.status==='done' : item.status!=='done'; }).length;
+  }
+  function projectCollapseKey(project){
+    var value=String((project&&project.id)||'project');
+    var hash=0;
+    for(var i=0;i<value.length;i++) hash=((hash<<5)-hash+value.charCodeAt(i))|0;
+    return 'work_project_'+Math.abs(hash);
+  }
   function renderTaskSnippet(item){
     return '<div class="ptask"><input type="checkbox" class="chk" ' + (item.status==='done'?'checked':'') + ' onchange="toggle(\'' + item.id + '\')">'
       + '<span class="ptitle ' + (item.status==='done'?'done':'') + '" onclick="openForm(\'work\',\'' + item.id + '\')">' + esc(item.title) + '</span>'
@@ -4649,24 +5051,69 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
       + (summary.riskMs ? ' · ⚠风险里程碑 ' + summary.riskMs : '')
       + (summary.accuracy !== null ? (' · 估算准确率 ' + summary.accuracy.toFixed(0) + '%') : '');
   }
+  function renderProjectTasks(summary){
+    var k=kit();
+    var openItems=summary.openItems || summary.items.filter(function(item){ return item.status!=='done'; });
+    var completedItems=summary.completedItems || summary.items.filter(function(item){ return item.status==='done'; });
+    var openList=openItems.length
+      ? openItems.map(renderTaskSnippet).join('')
+      : (k.empty ? k.empty('当前没有待完成任务') : '<div class="empty">当前没有待完成任务</div>');
+    var completed='';
+    if(completedItems.length){
+      completed='<details class="work-completed-tasks"><summary><span>✓ 已完成</span><b>'+completedItems.length+'</b></summary>'
+        +'<div class="work-completed-task-list">'+completedItems.map(renderTaskSnippet).join('')+'</div></details>';
+    }
+    return '<div class="ptasks"><div class="ph"><span>待完成任务</span><span>'+openItems.length+' 项</span></div>'
+      +openList+completed+'</div>';
+  }
   function renderProjectCard(summary){
     var p = summary.project;
     var k = kit();
+    var key=projectCollapseKey(p);
+    var collapsed=!!((model().collapseState||{})[key]);
     var healthBadge = p.status==='done'
-      ? '✅'
+      ? (k.badge ? k.badge('已完成','#10b98118','#047857') : '<span class="tag" style="background:#10b98118;color:#047857">已完成</span>')
       : (k.badge ? k.badge(summary.healthMeta[1], summary.healthMeta[0]+'22', summary.healthMeta[0]) : '<span class="tag" style="background:' + summary.healthMeta[0] + '22;color:' + summary.healthMeta[0] + ';margin-left:4px;font-size:11px">' + summary.healthMeta[1] + '</span>');
-    var taskList = summary.items.length ? summary.sortedItems.map(renderTaskSnippet).join('') : (k.empty ? k.empty('暂无任务，点「＋任务」添加') : '<div class="empty">暂无任务，点「＋任务」添加</div>');
-    return '<div class="card work">'
-      + '<div class="t">' + esc(p.name) + ' ' + healthBadge + '</div>'
-      + '<div class="n">' + summary.pct + '%</div>'
+    return '<article class="card work work-project-card'+(collapsed?' collapsed':'')+'" data-collapse="'+key+'">'
+      + '<div class="work-project-card-head"><div class="work-project-card-title"><div class="t">' + esc(p.name) + ' ' + healthBadge + '</div>'
+      + '<div class="work-project-progress"><b>'+summary.pct+'%</b><span>'+summary.done+'/'+summary.items.length+' 已完成</span></div></div>'
+      + '<button type="button" class="work-project-toggle" aria-label="'+(collapsed?'展开':'折叠')+'项目 '+esc(p.name)+'" aria-expanded="'+(!collapsed)+'" onclick="event.stopPropagation();toggleCollapse(\''+key+'\')" title="'+(collapsed?'展开项目':'折叠项目')+'"><span>▾</span></button></div>'
+      + '<div class="work-project-card-body">'
       + '<div class="d">' + renderProjectMeta(summary) + '</div>'
       + '<div class="bar"><i style="width:' + summary.pct + '%;background:var(--work)"></i></div>'
-      + '<div class="ptasks"><div class="ph"><span>任务清单</span><span>' + summary.done + '/' + summary.items.length + '</span></div>' + taskList + '</div>'
+      + renderProjectTasks(summary)
       + '<div class="acts" style="margin-top:10px">'
       + '<button class="btn" onclick="openForm(\'work\',null,null,\'' + p.id + '\')">＋任务</button>'
-      + '<button class="icon-btn" onclick="openProjectForm(\'' + p.id + '\')">✏️</button>'
-      + '<button class="icon-btn" onclick="delProject(\'' + p.id + '\')">🗑️</button>'
-      + '</div></div>';
+      + '<button class="icon-btn" aria-label="编辑项目 '+esc(p.name)+'" title="编辑项目" onclick="openProjectForm(\'' + p.id + '\')">✏️</button>'
+      + '<button class="icon-btn" aria-label="删除项目 '+esc(p.name)+'" title="删除项目" onclick="delProject(\'' + p.id + '\')">🗑️</button>'
+      + '</div></div></article>';
+  }
+  function renderProjectGrid(projects){
+    var html='<div class="grid cards work-project-grid">';
+    projects.forEach(function(p){
+      try {
+        html += renderProjectCard(global.WorkbenchProjectHealth.summarizeProject(p));
+      } catch(e) {
+        console.error('[Workbench] Error rendering project card:', p && p.id, e);
+        html += '<div class="card work"><div class="t">⚠️ 项目渲染错误</div><div class="d">该项目数据可能存在问题</div></div>';
+      }
+    });
+    return html+'</div>';
+  }
+  function renderProjectGroups(vm){
+    var k=kit();
+    var active=vm.activeProjects || vm.projects.filter(function(p){ return (p.status||'active')!=='done'; });
+    var completed=vm.completedProjects || vm.projects.filter(function(p){ return p.status==='done'; });
+    var html='<section class="work-project-section"><div class="work-project-section-head"><div><b>进行中项目</b><span>把注意力留给仍需推进的工作</span></div><strong>'+active.length+'</strong></div>';
+    html+=active.length
+      ? renderProjectGrid(active)
+      : (k.empty ? k.empty(completed.length?'当前没有进行中的项目。':'还没有项目。建立你的研发课题 / 基金申请 / 平台建设项目吧。') : '<div class="empty">当前没有进行中的项目。</div>');
+    html+='</section>';
+    if(completed.length){
+      html+='<details class="work-project-archive"><summary><span><b>✓ 已完成项目</b><small>默认收起，随时可以回来查看</small></span><strong>'+completed.length+'</strong></summary>'
+        +'<div class="work-project-archive-body">'+renderProjectGrid(completed)+'</div></details>';
+    }
+    return html;
   }
   function renderProjectSummaryCards(vm){
     var totals = { projects: vm.projects.length, active:0, overdue:0, risk:0 };
@@ -4690,23 +5137,18 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
   global.renderWorkProjects = function(){
     var vm = model();
     var k = kit();
-    var body='';
-    if(!vm.projects.length){
-      body += k.empty ? k.empty('还没有项目。建立你的研发课题 / 基金申请 / 平台建设项目吧。') : '<div class="empty">还没有项目。建立你的研发课题 / 基金申请 / 平台建设项目吧。</div>';
-    }else{
-      body += '<div class="grid cards">';
-      vm.projects.forEach(function(p){
-        try {
-          body += renderProjectCard(global.WorkbenchProjectHealth.summarizeProject(p));
-        } catch(e) {
-          console.error('[Workbench] Error rendering project card:', p && p.id, e);
-          body += '<div class="card work"><div class="t">⚠️ 项目渲染错误</div><div class="d">该项目数据可能存在问题</div></div>';
-        }
-      });
-      body += '</div>';
+    var activeCount=(vm.activeProjects||[]).length;
+    var completedCount=(vm.completedProjects||[]).length;
+    if(!vm.activeProjects && !vm.completedProjects){
+      activeCount=vm.projects.filter(function(p){ return (p.status||'active')!=='done'; }).length;
+      completedCount=vm.projects.length-activeCount;
     }
-    var actions = k.toolbar ? k.toolbar([{ label:'＋ 新项目', primary:true, onClick:'openProjectForm()' }]) : '<button class="btn primary" onclick="openProjectForm()">＋ 新项目</button>';
-    var panel = k.infoPanel ? k.infoPanel('📁 项目管理', body, { actions: actions }) : '<div class="panel"><div class="sec-head"><h2>📁 项目管理</h2>'+actions+'</div>'+body+'</div>';
+    var body=renderProjectGroups(vm);
+    var actions = k.toolbar ? k.toolbar([{ label:'＋ 新项目', primary:true, onClick:'event.stopPropagation();openProjectForm()' }]) : '<button class="btn primary" onclick="event.stopPropagation();openProjectForm()">＋ 新项目</button>';
+    var title='📁 项目管理（进行中 '+activeCount+' · 已完成 '+completedCount+'）';
+    var panel = k.collapsible
+      ? k.collapsible('work_projects', title, body, { collapsed:!!((vm.collapseState||{}).work_projects), headerActions:actions })
+      : '<div class="panel collapsible '+((vm.collapseState||{}).work_projects?'collapsed':'')+'" data-collapse="work_projects"><div class="panel-h" onclick="toggleCollapse(\'work_projects\')"><h2>'+title+'</h2><span>'+actions+'<span class="caret">▾</span></span></div><div class="panel-b">'+body+'</div></div>';
     return renderProjectSummaryCards(vm) + panel;
   };
   function renderWorkTabs(vm){
@@ -4727,28 +5169,33 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
     }
     return k.empty ? k.empty(emptyText) : '<div class="empty">'+emptyText+'</div>';
   }
-  function renderSection(key, title, body, opts){
+  function renderSeparatedItemList(items, emptyText){
     var k=kit();
-    var collapsed = !!((model().collapseState||{})[key]);
-    opts = Object.assign({ collapsed: collapsed }, opts || {});
-    if(k.collapsible) return k.collapsible(key, title, body, opts);
-    return '<div class="panel collapsible ' + (collapsed?'collapsed':'') + '"'+(opts.style?' style="'+opts.style+'"':'')+' data-collapse="'+key+'">'
-      + '<div class="panel-h" onclick="toggleCollapse(\''+key+'\')"><h2>'+title+'</h2><span style="display:flex;align-items:center;gap:8px">'+(opts.headerActions||'')+'<span class="caret">▾</span></span></div>'
-      + '<div class="panel-b">'+body+'</div></div>';
+    items=items||[];
+    if(!items.length) return k.empty ? k.empty(emptyText) : '<div class="empty">'+emptyText+'</div>';
+    var openItems=items.filter(function(item){ return item.status!=='done'; });
+    var completedItems=items.filter(function(item){ return item.status==='done'; });
+    var html='<div class="work-item-group"><div class="work-item-group-head"><span>待完成</span><b>'+openItems.length+'</b></div>'
+      +(openItems.length ? renderItemList(openItems, '') : (k.empty ? k.empty('当前没有待完成事项') : '<div class="empty">当前没有待完成事项</div>'))+'</div>';
+    if(completedItems.length){
+      html+='<details class="work-completed-items"><summary><span>✓ 已完成</span><b>'+completedItems.length+'</b></summary>'
+        +'<div class="work-completed-items-body">'+renderItemList(completedItems, '')+'</div></details>';
+    }
+    return html;
   }
   function renderWorkModule(){
     var vm = model();
     var html = '';
     html += global.renderWorkProjects();
-    html += renderSectionWithModel(vm, 'tmp_work', '📝 临时任务（' + vm.tmpItems.length + '）', renderItemList(vm.tmpItems, '暂无临时任务，点「＋ 新建」记录零散工作。'), {
+    html += renderSectionWithModel(vm, 'tmp_work', '📝 临时任务（待完成 ' + countByStatus(vm.tmpItems,false) + ' · 已完成 '+countByStatus(vm.tmpItems,true)+'）', renderSeparatedItemList(vm.tmpItems, '暂无临时任务，点「＋ 新建」记录零散工作。'), {
       style:'margin-top:14px',
       headerActions:'<button class="btn primary" onclick="event.stopPropagation();openForm(\'work\')">＋ 新建</button>'
     });
     html += renderWorkTabs(vm);
     html += renderSectionWithModel(vm, 'cal_work', '📅 工作日历', global.renderCalendar('work'));
-    html += renderSectionWithModel(vm, 'ag_work', '🗓️ 日程（按日期）', renderItemList(vm.agendaItems, '暂无工作日程。'), { style:'margin-top:14px' });
-    var allBody = vm.workView==='board' ? global.renderKanban('work') : renderItemList(vm.filteredItems, '暂无工作事项。');
-    html += renderSectionWithModel(vm, 'all_work', '📋 全部工作事项', allBody, { style:'margin-top:14px' });
+    html += renderSectionWithModel(vm, 'ag_work', '🗓️ 日程（待完成 '+countByStatus(vm.agendaItems,false)+' · 已完成 '+countByStatus(vm.agendaItems,true)+'）', renderSeparatedItemList(vm.agendaItems, '暂无工作日程。'), { style:'margin-top:14px' });
+    var allBody = vm.workView==='board' ? global.renderKanban('work') : renderSeparatedItemList(vm.filteredItems, '暂无工作事项。');
+    html += renderSectionWithModel(vm, 'all_work', '📋 全部工作事项（待完成 '+countByStatus(vm.filteredItems,false)+' · 已完成 '+countByStatus(vm.filteredItems,true)+'）', allBody, { style:'margin-top:14px' });
     return html;
   }
   function renderSectionWithModel(vm, key, title, body, opts){
@@ -5450,12 +5897,23 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
     var state=uiState();
     var items=(fullData.items||[]);
     var filtered=filteredItems('work');
+    var projects=(fullData.projects||[]);
+    var tmpItems=items.filter(function(i){ return i.cat==='work' && !i.projectId; });
+    var agendaItems=items.filter(function(i){ return i.cat==='work' && i.due; }).slice().sort(function(a,b){ return a.due.localeCompare(b.due); });
     return {
       state: state,
-      projects: (fullData.projects||[]),
-      tmpItems: items.filter(function(i){ return i.cat==='work' && !i.projectId; }),
-      agendaItems: items.filter(function(i){ return i.cat==='work' && i.due; }).slice().sort(function(a,b){ return a.due.localeCompare(b.due); }),
+      projects: projects,
+      activeProjects: projects.filter(function(p){ return (p.status||'active')!=='done'; }),
+      completedProjects: projects.filter(function(p){ return p.status==='done'; }),
+      tmpItems: tmpItems,
+      tmpOpenItems: tmpItems.filter(function(i){ return i.status!=='done'; }),
+      tmpCompletedItems: tmpItems.filter(function(i){ return i.status==='done'; }),
+      agendaItems: agendaItems,
+      agendaOpenItems: agendaItems.filter(function(i){ return i.status!=='done'; }),
+      agendaCompletedItems: agendaItems.filter(function(i){ return i.status==='done'; }),
       filteredItems: filtered,
+      openFilteredItems: filtered.filter(function(i){ return i.status!=='done'; }),
+      completedFilteredItems: filtered.filter(function(i){ return i.status==='done'; }),
       workView: state.workView || global.workView || 'list',
       collapseState: global.collapseState || {}
     };
@@ -5872,11 +6330,15 @@ document.querySelector('#nav .tab[data-cat="work"]').classList.add('active');
   }
   function renderTools(){
     var saved=(global.data&&global.data.__savedAt) ? new Date(global.data.__savedAt).toLocaleString() : '尚未记录';
+    var cloudBackup=global.WorkbenchCloudBackup&&global.WorkbenchCloudBackup.statusSummary
+      ? global.WorkbenchCloudBackup.statusSummary()
+      : '备份到网盘同步文件夹';
     return '<section class="panel more-tools"><div class="sec-head"><div><h2>🛡️ 数据与工具</h2><p>数据默认保存在当前电脑；浏览器数据被清理时，本地快照也可能一同丢失。</p></div><span class="module-status on">最近保存 '+esc(saved)+'</span></div>'
       +'<div class="tool-grid">'
       +'<button class="tool-card" onclick="exportData()"><span>⬇️</span><b>导出备份</b><small>保存一份 JSON 到电脑</small></button>'
       +'<button class="tool-card" onclick="importData()"><span>⬆️</span><b>导入数据</b><small>从已导出文件恢复</small></button>'
       +'<button class="tool-card" onclick="openBak()"><span>🕑</span><b>本地快照</b><small>查看和回滚最近改动</small></button>'
+      +'<button class="tool-card" onclick="openCloudBackup()"><span>☁️</span><b>网盘文件夹备份</b><small>'+esc(cloudBackup)+'</small></button>'
       +'<button class="tool-card" onclick="openSync()"><span>☁️</span><b>云端同步</b><small>配置私密 GitHub Gist</small></button>'
       +'<button class="tool-card" onclick="openCmdK()"><span>⌨️</span><b>快速命令</b><small>搜索动作或快速新建</small></button>'
       +'<button class="tool-card" onclick="openCheatsheet()"><span>📘</span><b>操作手册</b><small>查看快捷键与高频操作</small></button>'
