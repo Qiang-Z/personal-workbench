@@ -29,11 +29,15 @@
   }
   function renderTools(){
     var saved=(global.data&&global.data.__savedAt) ? new Date(global.data.__savedAt).toLocaleString() : '尚未记录';
+    var cloudBackup=global.WorkbenchCloudBackup&&global.WorkbenchCloudBackup.statusSummary
+      ? global.WorkbenchCloudBackup.statusSummary()
+      : '备份到网盘同步文件夹';
     return '<section class="panel more-tools"><div class="sec-head"><div><h2>🛡️ 数据与工具</h2><p>数据默认保存在当前电脑；浏览器数据被清理时，本地快照也可能一同丢失。</p></div><span class="module-status on">最近保存 '+esc(saved)+'</span></div>'
       +'<div class="tool-grid">'
       +'<button class="tool-card" onclick="exportData()"><span>⬇️</span><b>导出备份</b><small>保存一份 JSON 到电脑</small></button>'
       +'<button class="tool-card" onclick="importData()"><span>⬆️</span><b>导入数据</b><small>从已导出文件恢复</small></button>'
       +'<button class="tool-card" onclick="openBak()"><span>🕑</span><b>本地快照</b><small>查看和回滚最近改动</small></button>'
+      +'<button class="tool-card" onclick="openCloudBackup()"><span>☁️</span><b>网盘文件夹备份</b><small>'+esc(cloudBackup)+'</small></button>'
       +'<button class="tool-card" onclick="openSync()"><span>☁️</span><b>云端同步</b><small>配置私密 GitHub Gist</small></button>'
       +'<button class="tool-card" onclick="openCmdK()"><span>⌨️</span><b>快速命令</b><small>搜索动作或快速新建</small></button>'
       +'<button class="tool-card" onclick="openCheatsheet()"><span>📘</span><b>操作手册</b><small>查看快捷键与高频操作</small></button>'
