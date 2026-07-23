@@ -10,7 +10,9 @@
      个人工作台  版本日志  (VERSION LOG)
      仅记录对外公开发布的版本号。SCHEMA_VERSION 见 JS 顶部。
      ============================================================ -->
-<!-- v4.4.0 (2026-07-19)  信息简报：跨来源精选、去重、已读弱化与稍后阅读。
+<!-- v4.4.0 (2026-07-19)  信息简报：跨来源精选、去重、已读弱化与稍后阅读；
+     工作项目支持折叠，并将进行中 / 已完成内容分区显示；
+     支持将备份自动写入用户选择的网盘同步文件夹。
      v4.3.0 (2026-07-19)  轻量习惯助手：今日行动、弹性计划、休息与温和回顾。
      v4.2.0 (2026-07-19)  生活行动助手：近期事项、出行准备、重要日子与阅读下一步。
      v4.1.0 (2026-07-18)  财务助手升级：真实发生口径、预算与待确认账单、基金分组。
@@ -624,6 +626,20 @@
 </div>
 </div>
 </div>
+<!-- cloud folder backup modal -->
+<div class="mask" id="cloudBackupMask" onclick="if(event.target===this)closeCloudBackup()">
+<div class="modal cloud-backup-modal">
+<h3>☁ 网盘文件夹备份</h3>
+<div class="hint" style="margin-top:0">选择电脑上的网盘同步目录后，工作台会在其中创建“个人工作台备份”文件夹。无需网盘账号或开发者密钥，工作台只会读写这个备份子文件夹。</div>
+<div id="cloudBackupBody"></div>
+<div class="modal-acts">
+<button class="btn quiet" id="cloudBackupDisconnect" onclick="disconnectCloudBackup()" style="display:none">断开</button>
+<button class="btn" onclick="closeCloudBackup()">关闭</button>
+<button class="btn" id="cloudBackupSelect" onclick="connectCloudBackup()">选择网盘文件夹</button>
+<button class="btn primary" disabled id="cloudBackupNow" onclick="cloudBackupNow()">立即备份</button>
+</div>
+</div>
+</div>
 <input accept=".json" id="fileInput" onchange="doImport(event)" style="display:none" type="file"/>
 <div class="mask" id="bakMask" onclick="if(event.target===this)closeBak()">
 <div class="modal">
@@ -664,6 +680,17 @@
 <div><kbd>g</kbd> + <kbd>o/r/w/l/s/f/n/h/c</kbd> 跳转到概览/复盘/工作/生活/运动/金融/热榜/习惯/日历</div>
 <div><kbd>?</kbd> 本说明  ·  <kbd>Esc</kbd> 关闭弹层</div>
 <div style="margin-top:10px;color:var(--muted);font-size:12.5px">表单意外关闭？别慌：v4 自动暂存草稿 30 分钟，下次打开同名表单会询问是否恢复。</div>
+<section class="cheat-backup-guide">
+<h4>☁ 网盘文件夹备份怎么用</h4>
+<p><b>原理：</b>工作台把备份写入电脑上的网盘同步文件夹，再由网盘客户端上传；工作台不会直接登录网盘。</p>
+<ol>
+<li>先安装并登录 OneDrive、iCloud Drive、Dropbox、百度网盘等电脑客户端。</li>
+<li>进入“更多 → 网盘文件夹备份”，点击“选择网盘文件夹”。</li>
+<li>选择网盘内正在同步的目录，允许访问后会立即生成第一份备份。</li>
+<li>另一台电脑先等待网盘同步完成，再选择同一个目录，从“可恢复版本”中手动恢复。</li>
+</ol>
+<div class="cheat-backup-note">检测到已有备份时会暂停自动写入，请先恢复正确版本，再开启“每天自动备份”。目录选择功能建议使用桌面版 Chrome 或 Edge。</div>
+</section>
 </div>
 <div class="modal-acts"><button class="btn primary" onclick="closeCheatsheet()">知道了</button></div>
 </div>
